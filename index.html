@@ -384,7 +384,6 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
         </div>
         <div class="flex-gap8" style="margin-top:8px">
           <button class="btn btn-ghost btn-sm" style="flex:1" onclick="syncFromCloud()">🔄 Sync Now</button>
-          <button class="btn btn-ghost btn-sm" style="flex:1" onclick="signOut()">🚪 Sign Out</button>
         </div>
         <div id="home-storage-info" style="font-size:11px;color:var(--muted);margin-top:6px;text-align:center"></div>
       </div>
@@ -6743,13 +6742,12 @@ window.addEventListener('beforeunload',e=>{
 });
 
 // ══════════════════════════════════════════════════
-//  SUPABASE SYNC
+//  SUPABASE SYNC (no-auth, anon key)
 // ══════════════════════════════════════════════════
 const _SB_URL='https://pmzzmvzbgeonjnbreze.supabase.co';
 const _SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBtenptdnpiZ2VvbmpuYmZyZXplIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2Nzk1ODUsImV4cCI6MjA5MjI1NTU4NX0.4yydLRsigkbKjCb0VCPt9-ppxtPUPWbs5c6y-4C8szk';
 
 let _sb=null;
-let _currentUser=null;
 let _isOnline=navigator.onLine;
 let _syncQueue=new Set();
 
@@ -6770,7 +6768,7 @@ function _setSyncStatus(s){
 }
 
 async function _syncKeyToCloud(key){
-  if(!_sb||!_currentUser||!_isOnline){_syncQueue.add(key);return;}
+  if(!_sb||!_isOnline){_syncQueue.add(key);return;}
   try{
     const raw=localStorage.getItem(key);
     if(raw===null)return;
@@ -6784,14 +6782,14 @@ async function _syncKeyToCloud(key){
 }
 
 async function _flushQueue(){
-  if(!_sb||!_currentUser||!_isOnline)return;
+  if(!_sb||!_isOnline)return;
   const keys=[..._syncQueue];
   _syncQueue.clear();
   for(const key of keys)await _syncKeyToCloud(key);
 }
 
 async function syncFromCloud(){
-  if(!_sb||!_currentUser){toast('⚠️ Not signed in');return;}
+  if(!_sb){toast('⚠️ Sync not available');return;}
   if(!_isOnline){_setSyncStatus('offline');toast('🔴 Offline — sync when back online');return;}
   _setSyncStatus('syncing');
   try{
@@ -6806,7 +6804,6 @@ async function syncFromCloud(){
     }
     _setSyncStatus('ok');
     if(changed){
-      // Re-render current active tab
       const activeNav=document.querySelector('.nav-btn.active');
       const tab=activeNav?activeNav.classList[1]:'home';
       switchTab(tab);
@@ -6819,84 +6816,18 @@ async function syncFromCloud(){
   }
 }
 
-async function signOut(){
-  if(!_sb)return;
-  if(!confirm('Sign out? Your data stays on this device.'))return;
-  await _sb.auth.signOut();
-  _currentUser=null;
-  _setSyncStatus('idle');
-  _showLoginScreen();
-  toast('Signed out');
-}
-
-function _showLoginScreen(){
-  document.getElementById('login-overlay').classList.add('open');
-  document.getElementById('login-step1').style.display='block';
-  document.getElementById('login-step2').style.display='none';
-  document.getElementById('login-send-btn').disabled=false;
-  document.getElementById('login-send-btn').textContent='Send Code';
-}
-
-async function sendOTP(){
-  if(!_sb)return;
-  const email=document.getElementById('login-email').value.trim();
-  if(!email){toast('⚠️ Enter your email');return;}
-  const btn=document.getElementById('login-send-btn');
-  btn.disabled=true;btn.textContent='Sending…';
-  const{error}=await _sb.auth.signInWithOtp({email,options:{shouldCreateUser:true}});
-  if(error){
-    toast('⚠️ '+error.message);
-    btn.disabled=false;btn.textContent='Send Code';
-  }else{
-    document.getElementById('login-step1').style.display='none';
-    document.getElementById('login-step2').style.display='block';
-    toast('📧 Code sent — check your email!');
-  }
-}
-
-async function verifyOTP(){
-  if(!_sb)return;
-  const email=document.getElementById('login-email').value.trim();
-  const token=document.getElementById('login-otp').value.trim();
-  if(!token){toast('⚠️ Enter the code');return;}
-  const btn=document.getElementById('login-verify-btn');
-  btn.disabled=true;btn.textContent='Verifying…';
-  const{data,error}=await _sb.auth.verifyOtp({email,token,type:'email'});
-  if(error){
-    toast('⚠️ '+error.message);
-    btn.disabled=false;btn.textContent='Verify';
-  }else{
-    _currentUser=data.user;
-    document.getElementById('login-overlay').classList.remove('open');
-    toast('✅ Signed in!');
-    await syncFromCloud();
-  }
-}
+function signOut(){toast('ℹ️ No sign-in required — sync is automatic');}
+function sendOTP(){}
+function verifyOTP(){}
 
 async function _sbInit(){
   if(!_initSupabase())return;
-  _sb.auth.onAuthStateChange((event,session)=>{
-    _currentUser=session?session.user:null;
-  });
-  try{
-    const{data:{session}}=await _sb.auth.getSession();
-    if(session){
-      _currentUser=session.user;
-      document.getElementById('login-overlay').classList.remove('open');
-      await syncFromCloud();
-    }else{
-      _showLoginScreen();
-    }
-  }catch(e){
-    console.warn('Auth check failed (offline?):', e);
-    // If offline and no session, still allow local use
-    _showLoginScreen();
-  }
+  await syncFromCloud();
 }
 
 window.addEventListener('online',async()=>{
   _isOnline=true;
-  if(_currentUser){
+  if(_sb){
     _setSyncStatus('syncing');
     await _flushQueue();
     _setSyncStatus('ok');
@@ -6920,27 +6851,6 @@ function updateStorageInfo(){
 }
 </script>
 
-<!-- LOGIN OVERLAY -->
-<div id="login-overlay" class="login-overlay">
-  <div class="login-box">
-    <div class="login-logo">🏋️</div>
-    <h2>Jo's Training Hub</h2>
-    <p class="login-sub">Sign in to sync your data across devices</p>
-    <!-- Step 1: Email -->
-    <div id="login-step1">
-      <label>Email</label>
-      <input id="login-email" type="email" placeholder="your@email.com" autocomplete="email" style="margin-bottom:0">
-      <button id="login-send-btn" class="btn btn-plan btn-block" onclick="sendOTP()" style="margin-top:10px">Send Code</button>
-    </div>
-    <!-- Step 2: OTP -->
-    <div id="login-step2" style="display:none">
-      <p class="login-hint">📧 Check your email for a 6-digit code</p>
-      <label>Code</label>
-      <input id="login-otp" type="number" inputmode="numeric" placeholder="123456" style="text-align:center;font-size:22px;letter-spacing:.15em;margin-bottom:0">
-      <button id="login-verify-btn" class="btn btn-plan btn-block" onclick="verifyOTP()" style="margin-top:10px">Verify</button>
-      <button class="btn btn-ghost btn-block" style="margin-top:8px;font-size:13px" onclick="document.getElementById('login-step1').style.display='block';document.getElementById('login-step2').style.display='none'">← Change email</button>
-    </div>
-  </div>
-</div>
+<!-- login overlay removed — sync uses anon key, no login needed -->
 </body>
 </html>
