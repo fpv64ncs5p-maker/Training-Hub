@@ -6858,7 +6858,21 @@ function sendOTP(){}
 function verifyOTP(){}
 
 async function _sbInit(){
-  await syncFromCloud();
+  if(!_ghToken())return;
+  // If local has meaningful data, push to cloud (local wins)
+  // Only pull from cloud if local is completely empty
+  const hasLocalData=DATA_KEYS.some(k=>{
+    const v=localStorage.getItem(k);
+    if(!v)return false;
+    try{const p=JSON.parse(v);return Array.isArray(p)?p.length>0:(p&&typeof p==='object'&&Object.keys(p).length>0);}
+    catch{return false;}
+  });
+  if(hasLocalData){
+    try{await _pushToGist();_setSyncStatus('ok');}
+    catch(e){_setSyncStatus('error');}
+  }else{
+    await syncFromCloud();
+  }
 }
 
 window.addEventListener('online',async()=>{
