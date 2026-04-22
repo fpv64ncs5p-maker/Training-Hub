@@ -380,7 +380,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
         <div class="home-section-title">Data</div>
         <div class="flex-gap8">
           <button class="btn btn-ghost btn-sm" style="flex:1" onclick="exportAllData()">📦 Export Backup</button>
-          <button class="btn btn-ghost btn-sm" style="flex:1" onclick="importAllData()">📂 Restore Backup</button>
+          <label class="btn btn-ghost btn-sm" style="flex:1;cursor:pointer">📂 Restore Backup<input type="file" accept=".json" style="display:none" onchange="importAllData(this)"></label>
         </div>
         <div class="flex-gap8" style="margin-top:8px">
           <button class="btn btn-ghost btn-sm" style="flex:1" onclick="syncFromCloud()">🔄 Sync Now</button>
@@ -1157,7 +1157,6 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 <!-- TOAST -->
 <div id="toast"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
 // ══════════════════════════════════════════════════
 //  DATA
@@ -1437,11 +1436,9 @@ function exportAllData(){
   toast('📦 Backup downloaded!');
 }
 
-function importAllData(){
-  const input=document.createElement('input');
-  input.type='file';
-  input.accept='.json';
-  input.onchange=e=>{
+function importAllData(inputEl){
+  const input=inputEl||document.createElement('input');
+  const doRead=e=>{
     const file=e.target.files[0];
     if(!file)return;
     const reader=new FileReader();
@@ -1465,7 +1462,8 @@ function importAllData(){
     };
     reader.readAsText(file);
   };
-  input.click();
+  if(inputEl){doRead({target:inputEl});}
+  else{input.type='file';input.accept='.json';input.onchange=doRead;input.click();}
 }
 
 // ── Text-input modal (replaces native prompt()) ──
@@ -6742,22 +6740,14 @@ window.addEventListener('beforeunload',e=>{
 });
 
 // ══════════════════════════════════════════════════
-//  SUPABASE SYNC (no-auth, anon key)
+//  SUPABASE SYNC (raw fetch, no SDK)
 // ══════════════════════════════════════════════════
-const _SB_URL='https://pmzzmvzbgeonjnbreze.supabase.co';
+const _SB_URL='https://pmzzmvzbgeonjnbreze.supabase.co/rest/v1';
 const _SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBtenptdnpiZ2VvbmpuYmZyZXplIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2Nzk1ODUsImV4cCI6MjA5MjI1NTU4NX0.4yydLRsigkbKjCb0VCPt9-ppxtPUPWbs5c6y-4C8szk';
+const _SB_HEADERS={'apikey':_SB_KEY,'Authorization':'Bearer '+_SB_KEY,'Content-Type':'application/json'};
 
-let _sb=null;
 let _isOnline=navigator.onLine;
 let _syncQueue=new Set();
-
-function _initSupabase(){
-  try{
-    if(typeof supabase==='undefined'||!supabase.createClient){console.warn('Supabase SDK not loaded');return false;}
-    _sb=supabase.createClient(_SB_URL,_SB_KEY);
-    return true;
-  }catch(e){console.warn('Supabase init failed:',e);return false;}
-}
 
 function _setSyncStatus(s){
   const el=document.getElementById('sync-status');
@@ -6768,11 +6758,16 @@ function _setSyncStatus(s){
 }
 
 async function _syncKeyToCloud(key){
-  if(!_sb||!_isOnline){_syncQueue.add(key);return;}
+  if(!_isOnline){_syncQueue.add(key);return;}
   try{
     const raw=localStorage.getItem(key);
     if(raw===null)return;
-    await _sb.from('user_data').upsert({key,value:JSON.parse(raw),updated_at:new Date().toISOString()},{onConflict:'key'});
+    const res=await fetch(`${_SB_URL}/user_data`,{
+      method:'POST',
+      headers:{..._SB_HEADERS,'Prefer':'resolution=merge-duplicates,return=minimal'},
+      body:JSON.stringify({key,value:JSON.parse(raw),updated_at:new Date().toISOString()})
+    });
+    if(!res.ok)throw new Error(await res.text());
     _setSyncStatus('ok');
   }catch(e){
     _syncQueue.add(key);
@@ -6782,21 +6777,21 @@ async function _syncKeyToCloud(key){
 }
 
 async function _flushQueue(){
-  if(!_sb||!_isOnline)return;
+  if(!_isOnline)return;
   const keys=[..._syncQueue];
   _syncQueue.clear();
   for(const key of keys)await _syncKeyToCloud(key);
 }
 
 async function syncFromCloud(){
-  if(!_sb){toast('⚠️ Sync not available');return;}
   if(!_isOnline){_setSyncStatus('offline');toast('🔴 Offline — sync when back online');return;}
   _setSyncStatus('syncing');
   try{
-    const{data,error}=await _sb.from('user_data').select('key,value,updated_at');
-    if(error)throw error;
+    const res=await fetch(`${_SB_URL}/user_data?select=key,value,updated_at`,{headers:_SB_HEADERS});
+    if(!res.ok)throw new Error(await res.text());
+    const data=await res.json();
     let changed=false;
-    for(const row of (data||[])){
+    for(const row of data){
       if(DATA_KEYS.includes(row.key)&&row.value!==null){
         localStorage.setItem(row.key,JSON.stringify(row.value));
         changed=true;
@@ -6816,22 +6811,19 @@ async function syncFromCloud(){
   }
 }
 
-function signOut(){toast('ℹ️ No sign-in required — sync is automatic');}
+function signOut(){}
 function sendOTP(){}
 function verifyOTP(){}
 
 async function _sbInit(){
-  if(!_initSupabase())return;
   await syncFromCloud();
 }
 
 window.addEventListener('online',async()=>{
   _isOnline=true;
-  if(_sb){
-    _setSyncStatus('syncing');
-    await _flushQueue();
-    _setSyncStatus('ok');
-  }
+  _setSyncStatus('syncing');
+  await _flushQueue();
+  _setSyncStatus('ok');
 });
 window.addEventListener('offline',()=>{
   _isOnline=false;
