@@ -387,6 +387,17 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
         </div>
         <div id="home-storage-info" style="font-size:11px;color:var(--muted);margin-top:6px;text-align:center"></div>
       </div>
+
+      <!-- SYNC SETUP -->
+      <div class="home-section" id="sync-setup" style="display:none">
+        <div class="home-section-title">☁️ Sync Setup</div>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:8px">Paste your GitHub token to enable cross-device sync. It's stored only on this device.</p>
+        <div class="flex-gap8">
+          <input id="gh-token-input" type="password" placeholder="ghp_…" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--card);color:var(--text)">
+          <button class="btn btn-primary btn-sm" onclick="saveGHToken()">Save</button>
+        </div>
+        <p style="font-size:11px;color:var(--muted);margin-top:6px">Need a token? Go to github.com → Settings → Developer settings → Personal access tokens → Fine-grained → New token → select <em>Gists</em> read/write scope.</p>
+      </div>
     </div>
 
     <!-- GYM TAB -->
@@ -6380,6 +6391,9 @@ function renderHome(){
   renderHomeWeekCalendar();
   renderHomeMotivation();
   updateStorageInfo();
+  // Show sync setup card if no token saved
+  const ss=document.getElementById('sync-setup');
+  if(ss)ss.style.display=_ghToken()?'none':'block';
 }
 
 function renderHomeTodayFocus(){
@@ -6740,14 +6754,12 @@ window.addEventListener('beforeunload',e=>{
 });
 
 // ══════════════════════════════════════════════════
-//  SUPABASE SYNC (raw fetch, no SDK)
+//  GITHUB GIST SYNC
 // ══════════════════════════════════════════════════
-const _SB_URL='https://pmzzmvzbgeonjnbreze.supabase.co/rest/v1';
-const _SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBtenptdnpiZ2VvbmpuYmZyZXplIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2Nzk1ODUsImV4cCI6MjA5MjI1NTU4NX0.4yydLRsigkbKjCb0VCPt9-ppxtPUPWbs5c6y-4C8szk';
-const _SB_HEADERS={'apikey':_SB_KEY,'Authorization':'Bearer '+_SB_KEY,'Content-Type':'application/json'};
-
+function _ghHeaders(){return{'Authorization':'Bearer '+_ghToken(),'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','Content-Type':'application/json'};}
+const _GIST_FILE='training-hub-data.json';
 let _isOnline=navigator.onLine;
-let _syncQueue=new Set();
+let _syncTimer=null;
 
 function _setSyncStatus(s){
   const el=document.getElementById('sync-status');
@@ -6757,46 +6769,67 @@ function _setSyncStatus(s){
   el.textContent=c.icon?(c.icon+' '+c.label):'';
 }
 
-async function _syncKeyToCloud(key){
-  if(!_isOnline){_syncQueue.add(key);return;}
-  try{
-    const raw=localStorage.getItem(key);
-    if(raw===null)return;
-    const res=await fetch(`${_SB_URL}/user_data`,{
-      method:'POST',
-      headers:{..._SB_HEADERS,'Prefer':'resolution=merge-duplicates,return=minimal'},
-      body:JSON.stringify({key,value:JSON.parse(raw),updated_at:new Date().toISOString()})
-    });
-    if(!res.ok)throw new Error(await res.text());
-    _setSyncStatus('ok');
-  }catch(e){
-    _syncQueue.add(key);
-    _setSyncStatus('error');
-    console.warn('Sync error for key',key,e);
-  }
+function _ghToken(){return localStorage.getItem('_gh_token')||'';}
+function saveGHToken(){
+  const t=document.getElementById('gh-token-input').value.trim();
+  if(!t){toast('⚠️ Paste your GitHub token first');return;}
+  localStorage.setItem('_gh_token',t);
+  localStorage.removeItem('_gist_id');
+  document.getElementById('sync-setup').style.display='none';
+  toast('✅ Token saved! Syncing…');
+  syncFromCloud();
 }
 
-async function _flushQueue(){
-  if(!_isOnline)return;
-  const keys=[..._syncQueue];
-  _syncQueue.clear();
-  for(const key of keys)await _syncKeyToCloud(key);
+async function _getGistId(){
+  if(!_ghToken()){throw new Error('No token — enter it in the Sync Setup section');}
+  const cached=localStorage.getItem('_gist_id');
+  if(cached)return cached;
+  const res=await fetch('https://api.github.com/gists?per_page=100',{headers:_ghHeaders()});
+  if(!res.ok)throw new Error('Cannot list gists');
+  const gists=await res.json();
+  const found=gists.find(g=>g.files&&g.files[_GIST_FILE]);
+  if(found){localStorage.setItem('_gist_id',found.id);return found.id;}
+  const cr=await fetch('https://api.github.com/gists',{
+    method:'POST',headers:_ghHeaders(),
+    body:JSON.stringify({description:'Training Hub Sync',public:false,files:{[_GIST_FILE]:{content:'{}'}}})
+  });
+  if(!cr.ok)throw new Error('Cannot create gist');
+  const ng=await cr.json();
+  localStorage.setItem('_gist_id',ng.id);
+  return ng.id;
+}
+
+async function _pushToGist(){
+  const gistId=await _getGistId();
+  const data={};
+  DATA_KEYS.forEach(k=>{const v=localStorage.getItem(k);if(v!==null)data[k]=JSON.parse(v);});
+  const res=await fetch(`https://api.github.com/gists/${gistId}`,{
+    method:'PATCH',headers:_ghHeaders(),
+    body:JSON.stringify({files:{[_GIST_FILE]:{content:JSON.stringify(data)}}})
+  });
+  if(!res.ok)throw new Error('Cannot update gist');
 }
 
 async function syncFromCloud(){
   if(!_isOnline){_setSyncStatus('offline');toast('🔴 Offline — sync when back online');return;}
   _setSyncStatus('syncing');
   try{
-    const res=await fetch(`${_SB_URL}/user_data?select=key,value,updated_at`,{headers:_SB_HEADERS});
-    if(!res.ok)throw new Error(await res.text());
-    const data=await res.json();
-    let changed=false;
-    for(const row of data){
-      if(DATA_KEYS.includes(row.key)&&row.value!==null){
-        localStorage.setItem(row.key,JSON.stringify(row.value));
-        changed=true;
-      }
+    const gistId=await _getGistId();
+    const res=await fetch(`https://api.github.com/gists/${gistId}`,{headers:_ghHeaders()});
+    if(!res.ok)throw new Error('Cannot fetch gist');
+    const gist=await res.json();
+    const raw=gist.files[_GIST_FILE]?.content;
+    if(!raw||raw==='{}'){
+      await _pushToGist();
+      _setSyncStatus('ok');
+      toast('🟢 Data uploaded to cloud!');
+      return;
     }
+    const data=JSON.parse(raw);
+    let changed=false;
+    DATA_KEYS.forEach(k=>{
+      if(data[k]!==undefined){localStorage.setItem(k,JSON.stringify(data[k]));changed=true;}
+    });
     _setSyncStatus('ok');
     if(changed){
       const activeNav=document.querySelector('.nav-btn.active');
@@ -6811,6 +6844,15 @@ async function syncFromCloud(){
   }
 }
 
+function _syncKeyToCloud(){
+  if(!_isOnline)return;
+  clearTimeout(_syncTimer);
+  _syncTimer=setTimeout(async()=>{
+    try{await _pushToGist();_setSyncStatus('ok');}
+    catch(e){_setSyncStatus('error');console.warn('Push error:',e);}
+  },3000);
+}
+
 function signOut(){}
 function sendOTP(){}
 function verifyOTP(){}
@@ -6822,8 +6864,8 @@ async function _sbInit(){
 window.addEventListener('online',async()=>{
   _isOnline=true;
   _setSyncStatus('syncing');
-  await _flushQueue();
-  _setSyncStatus('ok');
+  try{await _pushToGist();_setSyncStatus('ok');}
+  catch(e){_setSyncStatus('error');};
 });
 window.addEventListener('offline',()=>{
   _isOnline=false;
