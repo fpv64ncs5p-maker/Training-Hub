@@ -383,7 +383,8 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
           <label class="btn btn-ghost btn-sm" style="flex:1;cursor:pointer">📂 Restore Backup<input type="file" accept=".json" style="display:none" onchange="importAllData(this)"></label>
         </div>
         <div class="flex-gap8" style="margin-top:8px">
-          <button class="btn btn-ghost btn-sm" style="flex:1" onclick="syncFromCloud()">🔄 Sync Now</button>
+          <button class="btn btn-ghost btn-sm" style="flex:1" onclick="pushToCloud()">☁️ Push to Cloud</button>
+          <button class="btn btn-ghost btn-sm" style="flex:1" onclick="pullFromCloud()">⬇️ Pull from Cloud</button>
         </div>
         <div id="home-storage-info" style="font-size:11px;color:var(--muted);margin-top:6px;text-align:center"></div>
       </div>
@@ -6391,9 +6392,13 @@ function renderHome(){
   renderHomeWeekCalendar();
   renderHomeMotivation();
   updateStorageInfo();
-  // Show sync setup card if no token saved
+  // Show sync setup card if no token saved; show clear link if token exists
   const ss=document.getElementById('sync-setup');
   if(ss)ss.style.display=_ghToken()?'none':'block';
+  const si=document.getElementById('home-storage-info');
+  if(si&&_ghToken()){
+    si.innerHTML+='<br>☁️ Sync connected · <a href="#" onclick="clearGHToken();return false;" style="color:var(--muted)">clear token</a>';
+  }
 }
 
 function renderHomeTodayFocus(){
@@ -6853,6 +6858,24 @@ function _syncKeyToCloud(){
   },3000);
 }
 
+async function pushToCloud(){
+  if(!_ghToken()){toast('⚠️ No token — set up sync first');return;}
+  _setSyncStatus('syncing');
+  try{await _pushToGist();_setSyncStatus('ok');toast('☁️ Pushed to cloud!');}
+  catch(e){_setSyncStatus('error');toast('⚠️ Push failed: '+e.message);}
+}
+async function pullFromCloud(){
+  if(!_ghToken()){toast('⚠️ No token — set up sync first');return;}
+  await syncFromCloud();
+}
+function clearGHToken(){
+  if(!confirm('Remove sync token? You can re-enter it anytime.'))return;
+  localStorage.removeItem('_gh_token');
+  localStorage.removeItem('_gist_id');
+  _setSyncStatus('idle');
+  renderHome();
+  toast('🔑 Token cleared');
+}
 function signOut(){}
 function sendOTP(){}
 function verifyOTP(){}
