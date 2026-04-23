@@ -640,6 +640,11 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
       <!-- CLIMB LOG MODE -->
       <div id="climb-log">
         <div id="climb-edit-banner" style="display:none;background:var(--warn,#f59e0b);color:#000;padding:8px 12px;border-radius:8px;margin-bottom:8px;font-size:13px;font-weight:600;text-align:center">✏️ Editing saved session — changes will overwrite the original <button onclick="cancelClimbEdit()" style="background:#fff3;border:none;border-radius:4px;padding:2px 8px;margin-left:8px;cursor:pointer;font-size:12px">Cancel</button></div>
+        <div id="climb-draft-banner" style="display:none;background:#dbeafe;border:1px solid #93c5fd;padding:8px 12px;border-radius:8px;margin-bottom:8px;font-size:13px;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="flex:1;color:#1e40af;font-weight:600"></span>
+          <button onclick="restoreClimbDraft()" style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:600">↩ Restore</button>
+          <button onclick="discardClimbDraft()" style="background:#e5e7eb;color:#374151;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px">Discard</button>
+        </div>
         <div class="card">
           <div class="form-row cols2">
             <div>
@@ -3086,6 +3091,7 @@ function renderClimbBlocks(){
     document.getElementById('climb-session-summary').style.display='none';
     return;
   }
+  _saveDraftClimb();
 
   let html='';
 
@@ -3624,6 +3630,7 @@ function saveClimbSession(){
     toast('✅ Session saved!');
   }
   climbSession={warmup:[],blocks:[],cooldown:[]};
+  _clearDraftClimb();
   renderClimbBlocks();
   document.getElementById('climb-date').value=today();
   document.getElementById('climb-duration').value='';
@@ -3695,10 +3702,51 @@ function cancelClimbEdit(){
   _editingClimbId=null;clearDirty();
   document.getElementById('climb-edit-banner').style.display='none';
   document.getElementById('climb-save-btn').textContent='Save Session';
-  climbSession={warmup:[],blocks:[],cooldown:[]};renderClimbBlocks();
+  climbSession={warmup:[],blocks:[],cooldown:[]};_clearDraftClimb();renderClimbBlocks();
   document.getElementById('climb-date').value=today();
   document.getElementById('climb-duration').value='';
   toast('Edit cancelled');
+}
+
+// ── Climb draft autosave ──
+function _saveDraftClimb(){
+  if(!climbSession.warmup.length&&!climbSession.blocks.length&&!climbSession.cooldown.length)return;
+  const draft={
+    session:climbSession,
+    date:document.getElementById('climb-date')?.value||'',
+    gym:document.getElementById('climb-gym')?.value||'',
+    duration:document.getElementById('climb-duration')?.value||'',
+    savedAt:new Date().toISOString()
+  };
+  localStorage.setItem('_draft_climb',JSON.stringify(draft));
+}
+function _clearDraftClimb(){localStorage.removeItem('_draft_climb');}
+function _restoreDraftClimb(){
+  const raw=localStorage.getItem('_draft_climb');
+  if(!raw)return;
+  const draft=JSON.parse(raw);
+  const routeCount=(draft.session.warmup?.length||0)+(draft.session.cooldown?.length||0)+(draft.session.blocks?.reduce((s,b)=>(s+(b.routes?.length||0)+(b.sets?.length||0)),0)||0);
+  if(!routeCount){_clearDraftClimb();return;}
+  const when=draft.savedAt?new Date(draft.savedAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'';
+  const banner=document.getElementById('climb-draft-banner');
+  if(banner){banner.style.display='flex';banner.querySelector('span').textContent=`Unsaved session from ${when} (${routeCount} entries). Restore?`;}
+}
+function restoreClimbDraft(){
+  const raw=localStorage.getItem('_draft_climb');
+  if(!raw)return;
+  const draft=JSON.parse(raw);
+  climbSession=draft.session;
+  if(draft.date)document.getElementById('climb-date').value=draft.date;
+  if(draft.gym)document.getElementById('climb-gym').value=draft.gym;
+  if(draft.duration)document.getElementById('climb-duration').value=draft.duration;
+  _clearDraftClimb();
+  document.getElementById('climb-draft-banner').style.display='none';
+  renderClimbBlocks();
+  toast('✅ Session restored!');
+}
+function discardClimbDraft(){
+  _clearDraftClimb();
+  document.getElementById('climb-draft-banner').style.display='none';
 }
 
 function renderClimbHistory(){
@@ -6748,6 +6796,7 @@ document.addEventListener('DOMContentLoaded',async ()=>{
   renderClimbTemplates();
   renderGymMacroContextBanner();
   renderHome();
+  _restoreDraftClimb();
   // Supabase auth + sync
   await _sbInit();
 });
