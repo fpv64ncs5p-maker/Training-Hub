@@ -1382,7 +1382,7 @@ const WEEK_TEMPLATE = [
 // ══════════════════════════════════════════════════
 const DB = {
   get(k){try{return JSON.parse(localStorage.getItem(k))||null}catch{return null}},
-  set(k,v){localStorage.setItem(k,JSON.stringify(v));_syncKeyToCloud(k);},
+  set(k,v){localStorage.setItem(k,JSON.stringify(v));localStorage.setItem('_local_modified',Date.now().toString());_syncKeyToCloud(k);},
   gymSessions(){return this.get('gym_sessions')||[]},
   saveGym(s){const a=this.gymSessions();a.unshift(s);this.set('gym_sessions',a)},
   updateGym(s){const a=this.gymSessions().map(x=>String(x.id)===String(s.id)?s:x);this.set('gym_sessions',a)},
@@ -6898,6 +6898,9 @@ async function _pushToGist(){
     const gistId=await _getGistId();
     const data={};
     DATA_KEYS.forEach(k=>{const v=localStorage.getItem(k);if(v!==null)data[k]=JSON.parse(v);});
+    // Stamp with current local timestamp so other devices can compare
+    const ts=parseInt(localStorage.getItem('_local_modified')||'0')||Date.now();
+    data._last_modified=ts;
     const res=await fetch(`https://api.github.com/gists/${gistId}`,{
       method:'PATCH',headers:_ghHeaders(),
       body:JSON.stringify({files:{[_GIST_FILE]:{content:JSON.stringify(data)}}})
@@ -6928,6 +6931,8 @@ async function syncFromCloud(){
     DATA_KEYS.forEach(k=>{
       if(data[k]!==undefined){localStorage.setItem(k,JSON.stringify(data[k]));changed=true;}
     });
+    // Adopt the Gist's timestamp so this device doesn't push stale data back on next load
+    if(data._last_modified){localStorage.setItem('_local_modified',data._last_modified.toString());}
     _setSyncStatus('ok');
     if(changed){
       const activeNav=document.querySelector('.nav-btn.active');
@@ -6953,6 +6958,8 @@ function _syncKeyToCloud(){
 
 async function pushToCloud(){
   if(!_ghToken()){toast('⚠️ No token — set up sync first');return;}
+  // Bump timestamp so this push is recognised as newer by other devices
+  localStorage.setItem('_local_modified',Date.now().toString());
   _setSyncStatus('syncing');
   try{await _pushToGist();_setSyncStatus('ok');toast('☁️ Pushed to cloud!');}
   catch(e){_setSyncStatus('error');toast('⚠️ Push failed: '+e.message);}
@@ -6975,22 +6982,49 @@ function verifyOTP(){}
 
 async function _sbInit(){
   if(!_ghToken())return;
-  // If local has meaningful data, push to cloud (local wins on startup)
-  // Only pull from cloud if local is completely empty
-  const hasLocalData=DATA_KEYS.some(k=>{
-    const v=localStorage.getItem(k);
-    if(!v)return false;
-    try{const p=JSON.parse(v);return Array.isArray(p)?p.length>0:(p&&typeof p==='object'&&Object.keys(p).length>0);}
-    catch{return false;}
-  });
-  if(hasLocalData){
-    // Delay startup push slightly so any in-flight debounced syncs can settle first
-    setTimeout(async()=>{
-      try{await _pushToGist();_setSyncStatus('ok');}
-      catch(e){_setSyncStatus('error');}
-    },500);
-  }else{
-    await syncFromCloud();
+  // Timestamp-based sync: compare local vs Gist, newest wins
+  // No more blind "local always wins" — prevents data divergence across devices
+  _setSyncStatus('syncing');
+  try{
+    const localTs=parseInt(localStorage.getItem('_local_modified')||'0');
+    const gistId=await _getGistId();
+    const res=await fetch(`https://api.github.com/gists/${gistId}`,{headers:_ghHeaders()});
+    if(!res.ok)throw new Error('Cannot fetch gist');
+    const gist=await res.json();
+    const raw=gist.files[_GIST_FILE]?.content;
+
+    // Gist is empty → upload local data (first time setup or reset)
+    if(!raw||raw==='{}'){
+      await _pushToGist();
+      _setSyncStatus('ok');
+      return;
+    }
+
+    const gistData=JSON.parse(raw);
+    const gistTs=gistData._last_modified||0;
+
+    if(gistTs>localTs){
+      // Cloud is newer → pull
+      DATA_KEYS.forEach(k=>{
+        if(gistData[k]!==undefined)localStorage.setItem(k,JSON.stringify(gistData[k]));
+      });
+      localStorage.setItem('_local_modified',gistTs.toString());
+      _setSyncStatus('ok');
+      toast('🟢 Updated from cloud!');
+      const activeNav=document.querySelector('.nav-btn.active');
+      const tab=activeNav?activeNav.classList[1]:'home';
+      switchTab(tab);
+    }else if(localTs>gistTs){
+      // Local is newer → push
+      await _pushToGist();
+      _setSyncStatus('ok');
+    }else{
+      // Already in sync
+      _setSyncStatus('ok');
+    }
+  }catch(e){
+    _setSyncStatus('error');
+    console.warn('_sbInit sync error:',e);
   }
 }
 
