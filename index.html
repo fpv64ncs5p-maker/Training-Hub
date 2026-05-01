@@ -4995,8 +4995,8 @@ function renderPlanner(){
       delete d.trainingType;delete d.trainingSubtype;
       delete d.duration;delete d.rpe;delete d.actual;
     }
-    // Remove any null placeholders left over from the old Before/After work structure
-    d.sessions=d.sessions.filter(s=>s!==null&&s!==undefined);
+    // Remove any null placeholders or ghost sessions with no trainingType
+    d.sessions=d.sessions.filter(s=>s!==null&&s!==undefined&&s.trainingType);
   });
   DB.savePlan(data);
   // Render week totals AFTER migration so plan_data is in sessions[] format
@@ -6505,10 +6505,10 @@ function renderHomeTodayFocus(){
     return;
   }
 
-  // Render today's sessions
+  // Render today's sessions (skip ghost sessions with no trainingType)
   let html='';
   const trainingIcons={'gym':'💪','climb':'🧗','tennis':'🎾','golf':'⛳','rehab':'🦵','active':'🏃','rest':'😴'};
-  todayData.sessions.forEach(s=>{
+  todayData.sessions.filter(s=>s&&s.trainingType).forEach(s=>{
     const icon=trainingIcons[s.trainingType]||'🏋️';
     const duration=s.duration?`${s.duration} min`:'';
     const rpe=s.rpe?` · RPE ${s.rpe}`:'';
@@ -6533,8 +6533,9 @@ function renderNextUpcomingSession(container,plan,todayStr){
   for(let i=1;i<7;i++){
     const nextDate=addDays(todayStr,i);
     const dayData=plan.find(d=>d.date===nextDate);
-    if(dayData&&dayData.sessions&&dayData.sessions.length>0){
-      const s=dayData.sessions[0];
+    const validSessions=(dayData?.sessions||[]).filter(s=>s&&s.trainingType);
+    if(validSessions.length>0){
+      const s=validSessions[0];
       const icon=trainingIcons[s.trainingType]||'🏋️';
       const label=TRAINING_TYPES[s.trainingType]?.label||s.trainingType;
       const dayName=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(nextDate).getDay()];
@@ -6850,6 +6851,7 @@ function _ghHeaders(){return{'Authorization':'Bearer '+_ghToken(),'Accept':'appl
 const _GIST_FILE='training-hub-data.json';
 let _isOnline=navigator.onLine;
 let _syncTimer=null;
+let _pushInProgress=false;  // mutex: prevents concurrent push collisions
 
 function _setSyncStatus(s){
   const el=document.getElementById('sync-status');
@@ -6890,14 +6892,20 @@ async function _getGistId(){
 }
 
 async function _pushToGist(){
-  const gistId=await _getGistId();
-  const data={};
-  DATA_KEYS.forEach(k=>{const v=localStorage.getItem(k);if(v!==null)data[k]=JSON.parse(v);});
-  const res=await fetch(`https://api.github.com/gists/${gistId}`,{
-    method:'PATCH',headers:_ghHeaders(),
-    body:JSON.stringify({files:{[_GIST_FILE]:{content:JSON.stringify(data)}}})
-  });
-  if(!res.ok)throw new Error('Cannot update gist');
+  if(_pushInProgress)return;  // skip if a push is already in flight
+  _pushInProgress=true;
+  try{
+    const gistId=await _getGistId();
+    const data={};
+    DATA_KEYS.forEach(k=>{const v=localStorage.getItem(k);if(v!==null)data[k]=JSON.parse(v);});
+    const res=await fetch(`https://api.github.com/gists/${gistId}`,{
+      method:'PATCH',headers:_ghHeaders(),
+      body:JSON.stringify({files:{[_GIST_FILE]:{content:JSON.stringify(data)}}})
+    });
+    if(!res.ok)throw new Error('Cannot update gist');
+  }finally{
+    _pushInProgress=false;
+  }
 }
 
 async function syncFromCloud(){
@@ -6935,7 +6943,7 @@ async function syncFromCloud(){
 }
 
 function _syncKeyToCloud(){
-  if(!_isOnline)return;
+  if(!_isOnline||_pushInProgress)return;
   clearTimeout(_syncTimer);
   _syncTimer=setTimeout(async()=>{
     try{await _pushToGist();_setSyncStatus('ok');}
@@ -6967,7 +6975,7 @@ function verifyOTP(){}
 
 async function _sbInit(){
   if(!_ghToken())return;
-  // If local has meaningful data, push to cloud (local wins)
+  // If local has meaningful data, push to cloud (local wins on startup)
   // Only pull from cloud if local is completely empty
   const hasLocalData=DATA_KEYS.some(k=>{
     const v=localStorage.getItem(k);
@@ -6976,8 +6984,11 @@ async function _sbInit(){
     catch{return false;}
   });
   if(hasLocalData){
-    try{await _pushToGist();_setSyncStatus('ok');}
-    catch(e){_setSyncStatus('error');}
+    // Delay startup push slightly so any in-flight debounced syncs can settle first
+    setTimeout(async()=>{
+      try{await _pushToGist();_setSyncStatus('ok');}
+      catch(e){_setSyncStatus('error');}
+    },500);
   }else{
     await syncFromCloud();
   }
