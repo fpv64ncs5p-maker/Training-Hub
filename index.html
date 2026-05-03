@@ -4995,8 +4995,8 @@ function renderPlanner(){
       delete d.trainingType;delete d.trainingSubtype;
       delete d.duration;delete d.rpe;delete d.actual;
     }
-    // Remove any null placeholders or ghost sessions with no trainingType
-    d.sessions=d.sessions.filter(s=>s!==null&&s!==undefined&&s.trainingType);
+    // Remove only null/undefined placeholders (legacy ghosts) — keep empty new sessions so user can fill them in
+    d.sessions=d.sessions.filter(s=>s!=null);
   });
   DB.savePlan(data);
   // Render week totals AFTER migration so plan_data is in sessions[] format
