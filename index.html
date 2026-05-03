@@ -1555,6 +1555,7 @@ function autoColonTime(el){
 }
 function fmtCardioTime(v){if(!v)return '';v=String(v).trim();if(/^\d+$/.test(v))return v+' min';if(/^\d+:\d{2}$/.test(v))return v;return v;}
 function fmtDay(d){return new Date(d+'T12:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'})}
+function getWeekNumber(d){const date=new Date(d+'T12:00:00');date.setHours(0,0,0,0);date.setDate(date.getDate()+3-(date.getDay()+6)%7);const week1=new Date(date.getFullYear(),0,4);return 'W'+String(1+Math.round(((date-week1)/86400000-3+(week1.getDay()+6)%7)/7)).padStart(2,'0');}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200)}
 function openModal(id){
   const m=document.getElementById(id);m.classList.add('open');
@@ -4973,7 +4974,7 @@ function renderPlanner(){
   if(!currentWeekStart)currentWeekStart=getMonday(today());
   const weekEnd=addDays(currentWeekStart,6);
   document.getElementById('planner-week-label').textContent=
-    fmtDay(currentWeekStart)+' – '+fmtDay(weekEnd);
+    getWeekNumber(currentWeekStart)+' · '+fmtDay(currentWeekStart)+' – '+fmtDay(weekEnd);
   const data=DB.planData();
   const weekKey=currentWeekStart;
   if(!data[weekKey])data[weekKey]=WEEK_TEMPLATE.map((d,i)=>({
@@ -5071,7 +5072,7 @@ function renderPlanner(){
     return `
     <div class="week-day${d.work?' is-work-day':''}">
       <div class="day-header" onclick="toggleDay(${i})">
-        <div class="day-name">${d.day}</div>
+        <div class="day-name">${d.day}<span style="display:block;font-size:10px;font-weight:500;color:var(--muted);letter-spacing:0">${d.date?new Date(d.date+'T12:00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short'}):''}</span></div>
         <div style="flex:0 1 auto;font-size:12px;display:flex;align-items:center;flex-wrap:wrap;gap:5px;min-width:0;overflow:hidden">
           ${(()=>{
             if(!d.work){
